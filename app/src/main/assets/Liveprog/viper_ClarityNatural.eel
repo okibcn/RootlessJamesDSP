@@ -1,0 +1,57 @@
+desc: ViPER Clarity (NATURAL mode)
+author: ViPER Audio (RE by Iscle) and ported by okibcn
+tags: filter viper
+
+clarity_gain:50<0,100,1>Clarity strength (%)
+
+@init
+clarity_gain=50;
+g = clarity_gain * 0.01;   // 0–100 → 0.0–1.0
+
+function ViPERClarity_Init() (
+    this.prev_inL = 0;
+    this.prev_inR = 0;
+    this.stateL   = 0;
+    this.stateR   = 0;
+
+    // 1st order Butterworth LPF at (srate/2 - 1000) Hz
+    // NoiseSharpening::Reset() -> setLPF_BW(srate/2 - 1000, srate) Algorithm from ViPERFX_RE
+    lpf_fc  = max(100.0, srate * 0.5 - 1000.0);
+    lpf_K   = tan($PI * lpf_fc / srate);
+    lpf_n   = 1.0 / (1.0 + lpf_K);
+    this.b0 = lpf_K * lpf_n;
+    this.b1 = lpf_K * lpf_n;
+    this.a1 = (1.0 - lpf_K) * lpf_n;
+);
+
+function ViPERClarity_ProcessSamples(left right) (
+    // Noise sharpening: x[n] + g * (x[n] - x[n-1])
+    // NoiseSharpening::Process() Algorithm from ViPERFX_RE  
+    nsL = left  + (left  - this.prev_inL) * g;
+    nsR = right + (right - this.prev_inR) * g;
+    this.prev_inL = left;
+    this.prev_inR = right;
+
+    // IIR 1st order LPF (Transposed direct form II)
+    // do_filter() in IIR_1st.h ported from ViPERFX_RE
+    histL = nsL * this.b1;
+    outL  = this.stateL + nsL * this.b0;
+    this.stateL = outL * this.a1 + histL;
+
+    histR = nsR * this.b1;
+    outR  = this.stateR + nsR * this.b0;
+    this.stateR = outR * this.a1 + histR;
+
+    this.outL = outL;
+    this.outR = outR;
+);
+
+function ViPERClarity_GetLeft()  ( this.outL; );
+function ViPERClarity_GetRight() ( this.outR; );
+
+clarity.ViPERClarity_Init();
+
+@sample
+clarity.ViPERClarity_ProcessSamples(spl0, spl1);
+spl0 = clarity.ViPERClarity_GetLeft();
+spl1 = clarity.ViPERClarity_GetRight();
