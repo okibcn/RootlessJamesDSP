@@ -1,0 +1,221 @@
+desc: CFW Bark Presence Engine (Cured)
+tags: Reference Neutrality, Studio Imaging & Transient Reconstruction
+author: Cerebral Whisperer 🅲🅵🆆 🄻🄰🄱🅂
+placeholder:0<0,1,{}> 🅲🅵🆆 🄱🄰🅁🄺
+
+@slider
+master_power:1<0,1,1{Off,On}>[ MASTER POWER ]
+global_gain:-14<-30,12,0.1>Global Gain (dB)
+stereo_width:0.70<0.5,2.0,0.01>Stereo Field Width
+vhe_level:4<0,4,1{L0 (Natural),L1 (Small),L2 (Studio),L3 (Mid Hall),L4 (Large Hall)}>VHE Room Level
+trans_enable:1<0,1,1{Off,On}>Transient Reconstruction
+trans_amount:0.75<0,1,0.01>Transient Strength (Attack)
+harm_enable:1<0,1,1{Off,On}>Harmonic Reconstruction (SPX)
+harmonic_richness:0.75<0,1,0.01>Harmonic Richness
+vocal_saturation:0.25<0,1,0.01>Vocal Drive (Saturation)
+vocal_life:1<0,1,0.01>Vocal Vitality (Life)
+viper_enable:1<0,1,1{Off,On}>ViPER Ozone+ Toggle
+clarity_db:6.0<3.5,14.8,0.1>Select Clarity (dB)
+virt_enable:1<0,1,1{Off,On}>Virtualizer Toggle
+virt_strength:1.0<0,1,0.01>Virtualizer Strength
+bass_enable:1<0,1,1{Off,On}>Dynamic Bass Toggle
+bass_freq:55<10,500,1>Bass Cut-off frequency
+bass_q:3<0.01,10,0.1>Bass Q factor
+bass_thr:7<-30,20,0.1>Bass Threshold (dB)
+bass_boost:14<0,35,1>Bass Max Boost (dB)
+bark_enable:1<0,1,1{Off,On}>SVF Bark Extraction Toggle
+vocal_bite:6<0,18,0.1>Vocal Bite (Grit)
+tone_enable:1<0,1,1{Off,On}>Adaptive Detail Toggle
+detail_focus:0.20<0,0.8,0.01>Detail Focus
+tilt_balance:0.0<-0.5,0.5,0.01>Tilt Balance (Bright/Warm)
+remaster_amount:0.10<0,1,0.01>Remaster Life
+surround_enable:1<0,1,1{Off,On}>DiffSurround Toggle
+surround_delay:20<0,20,0.1>Differential Surround (ms)
+surround_boost:60<0,240,1>Surround Boost (Matrix Intensity)
+m_image:1.0<0.5,1.5,0.01>3D Middle Image (Mid Boost)
+s_widen:1.5<0,1.5,0.01>3D Atmosphere (Side Boost)
+
+@init
+// --- Explicit Parameter Initialization (Mandatory Defaults) ---
+placeholder = 0; 
+master_power = 1;
+global_gain = -14.00;
+stereo_width = 0.70;
+vhe_level = 4;
+trans_enable = 1;
+trans_amount = 0.75;
+harm_enable = 1;
+harmonic_richness = 0.75;
+vocal_saturation = 0.25;
+vocal_life = 1.00;
+viper_enable = 1;
+clarity_db = 6.00; 
+virt_enable = 1;
+virt_strength = 1.00;
+bass_enable = 1;
+bass_freq = 55;
+bass_q = 3.00;
+bass_thr = 7.00;
+bass_boost = 14;
+bark_enable = 1;
+vocal_bite = 6.00;
+tone_enable = 1;
+detail_focus = 0.20;
+tilt_balance = 0.00;
+remaster_amount = 0.10;
+surround_enable = 1;
+surround_delay = 20.00;
+surround_boost = 60;
+m_image = 1.00;
+s_widen = 1.50;
+
+// --- Internal Constants & Memory Buffers ---
+DB_2_LOG = 0.11512925464970228420089957273422;
+bufL = 0; 
+bufR = 1000000;
+buf_size = (srate * 0.2) + 1;
+buf_pos = 0;
+
+// --- Authentic ViPER HighShelf Functions ---
+function Ozone_SetParams(gainDB) (
+    this.frequency = 8250.0;
+    this.gain = gainDB;
+    x = (2 * $PI * this.frequency) / srate;
+    sinX = sin(x); cosX = cos(x);
+    y = exp((this.gain * log(10.0)) / 40.0);
+    z = sqrt(y * 2.0) * sinX;
+    a = (y - 1.0) * cosX;
+    b = (y + 1.0) - a;
+    c = z + b;
+    d = (y + 1.0) * cosX;
+    e = (y + 1.0) + a;
+    f = (y - 1.0) - d;
+    this.a0 = 1.0 / c;
+    this.a1 = f * 2.0;
+    this.a2 = b - z;
+    this.b0 = (e + z) * y;
+    this.b1 = -y * 2.0 * ((y - 1.0) + d);
+    this.b2 = (e - z) * y;
+    this.x_1 = this.x_2 = this.y_1 = this.y_2 = 0.0;
+);
+
+function Ozone_Process(sample) (
+    out = (((this.x_1 * this.b1 + sample * this.b0 + this.b2 * this.x_2) - this.y_1 * this.a1) - this.a2 * this.y_2) * this.a0;
+    this.y_2 = this.y_1; this.y_1 = out;
+    this.x_2 = this.x_1; this.x_1 = sample;
+    out;
+);
+
+function db2Lin(dB) ( exp(dB * DB_2_LOG); );
+
+function svf_set(freq, q) (
+    this.g = tan($pi * freq / srate);
+    this.k = 1.0 / q;
+    this.a1 = 1.0 / (1.0 + this.g * (this.g + this.k));
+    this.a2 = this.g * this.a1;
+    this.a3 = this.g * this.a2;
+);
+
+function svf_process(sample) (
+    v3 = sample - this.ic2s;
+    v1 = this.a1 * this.ic1s + this.a2 * v3;
+    v2 = this.ic2s + this.a2 * this.ic1s + this.a3 * v3;
+    this.ic1s = 2.0 * v1 - this.ic1s;
+    this.ic2s = 2.0 * v2 - this.ic2s;
+    this.low = v2; this.band = v1; this.high = sample - this.k * v1 - v2;
+);
+
+function updateLinearParams() (
+    global_gain_lin = db2Lin(global_gain);
+    bite_gain_lin = db2Lin(vocal_bite);
+    bite_drive = vocal_saturation;
+    width = stereo_width;
+    delay_samples = (surround_delay / 1000) * srate;
+    detail_focus_lin = detail_focus * remaster_amount;
+    tilt_bright = 1 - (tilt_balance * 0.2);
+    
+    vhe_level == 0 ? vhe_gain = 1.0;          
+    vhe_level == 1 ? vhe_gain = 1.248312;    
+    vhe_level == 2 ? vhe_gain = 1.341511;    
+    vhe_level == 3 ? vhe_gain = 1.567789;    
+    vhe_level == 4 ? vhe_gain = 1.487227;    
+    
+    midBoost = m_image; sideBoost = s_widen * (1.1 + surround_boost/240.0); 
+    
+    bark_svfL.svf_set(3200, 0.75); bark_svfR.svf_set(3200, 0.75);
+    harm_svfL.svf_set(8000, 0.707); harm_svfR.svf_set(8000, 0.707);
+    bass_svfL.svf_set(bass_freq, bass_q); bass_svfR.svf_set(bass_freq, bass_q);
+    bass_boost_lin = db2Lin(bass_boost); bass_thr_lin = db2Lin(bass_thr);
+
+    v_ozL.Ozone_SetParams(clarity_db);
+    v_ozR.Ozone_SetParams(clarity_db);
+);
+
+updateLinearParams();
+
+
+@sample
+master_power == 1 ? (
+    // Stage 0: Virtualizer (Wavelet-style Differential Widener)
+    virt_enable == 1 ? (
+        v_diff = (spl0 - spl1) * virt_strength * 0.5;
+        spl0 += v_diff;
+        spl1 -= v_diff;
+    );
+
+    // 1. Presence & Bark Extraction
+    bark_enable == 1 ? (
+        bark_svfL.svf_process(spl0); bark_svfR.svf_process(spl1);
+        lifeL = bark_svfL.band * vocal_life; lifeR = bark_svfR.band * vocal_life;
+        s0_sat = sin(atan((bark_svfL.band + lifeL) * (1 + bite_drive) * 1.5)) * remaster_amount; 
+        s1_sat = sin(atan((bark_svfR.band + lifeR) * (1 + bite_drive) * 1.5)) * remaster_amount;
+        spl0 += (s0_sat * bite_gain_lin * 0.45 * detail_focus);
+        spl1 += (s1_sat * bite_gain_lin * 0.45 * detail_focus);
+    );
+
+    // 2. Harmonic Reconstruction
+    harm_enable == 1 ? (
+        harm_svfL.svf_process(spl0); harm_svfR.svf_process(spl1);
+        spl0 += sin(atan(harm_svfL.high * harmonic_richness * 2)) * harmonic_richness;
+        spl1 += sin(atan(harm_svfR.high * harmonic_richness * 2)) * harmonic_richness;
+    );
+
+    // 3. Transient Reconstruction
+    trans_enable == 1 ? ( spl0 += (spl0 * trans_amount); spl1 += (spl1 * trans_amount); );
+
+    // 4. Authentic ViPER Ozone+ (Biquad Filter)
+    viper_enable == 1 ? (
+        spl0 = v_ozL.Ozone_Process(spl0);
+        spl1 = v_ozR.Ozone_Process(spl1);
+    );
+
+    // 5. Tone Shaping
+    tone_enable == 1 ? (
+        spl0 += (harm_svfL.band * detail_focus_lin * tilt_bright);
+        spl1 += (harm_svfR.band * detail_focus_lin * tilt_bright);
+    );
+
+    // 6. Imaging & VHE
+    spl0 *= vhe_gain; spl1 *= vhe_gain;
+    ms_mid = (spl0 + spl1) * 0.5 * midBoost;
+    ms_side = (spl0 - spl1) * 0.5 * sideBoost;
+    spl0 = (ms_mid - ms_side) * width * global_gain_lin;
+    spl1 = (ms_mid + ms_side) * width * global_gain_lin;
+
+    // 7. Dynamic Bass Precision
+    bass_enable == 1 ? (
+        bass_svfL.svf_process(spl0); bass_svfR.svf_process(spl1);
+        b_gainL = min(bass_boost_lin, bass_thr_lin - bass_svfL.low);
+        b_gainR = min(bass_boost_lin, bass_thr_lin - bass_svfR.low);
+        spl0 += (bass_svfL.low * b_gainL);
+        spl1 += (bass_svfR.low * b_gainR);
+    );
+
+    // 8. Differential Surround
+    surround_enable == 1 ? (
+        bufL[buf_pos] = spl0; bufR[buf_pos] = spl1;
+        i_pos = (buf_pos - delay_samples + buf_size) % buf_size;
+        spl0 = bufL[i_pos]; spl1 = bufR[i_pos];
+        buf_pos = (buf_pos + 1) % buf_size;
+    );
+);
